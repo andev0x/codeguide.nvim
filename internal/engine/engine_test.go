@@ -53,6 +53,31 @@ func handleRequest() {}
 	if !containsEdge(result.ExecutionFlow, "startServer", "handleRequest") {
 		t.Fatalf("expected startServer -> handleRequest edge, got %#v", result.ExecutionFlow)
 	}
+
+	if len(result.FunctionRanges) == 0 {
+		t.Fatalf("expected function ranges in result")
+	}
+}
+
+func TestAnalyzeDetectsHiddenInitEntry(t *testing.T) {
+	root := t.TempDir()
+
+	mainFile := filepath.Join(root, "main.go")
+	writeFile(t, mainFile, `package demo
+
+func init() {}
+
+func main() {}
+`)
+
+	result, err := Analyze(Options{File: mainFile, MaxFunctions: 6, MaxFlowEdges: 8})
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	if !containsEntry(result.EntryPoints, "init") {
+		t.Fatalf("expected hidden init entry point, got %#v", result.EntryPoints)
+	}
 }
 
 func writeFile(t *testing.T, path string, content string) {
@@ -65,6 +90,15 @@ func writeFile(t *testing.T, path string, content string) {
 func containsEdge(edges []FlowEdge, from string, to string) bool {
 	for _, edge := range edges {
 		if edge.From == from && edge.To == to {
+			return true
+		}
+	}
+	return false
+}
+
+func containsEntry(entries []EntryPoint, name string) bool {
+	for _, entry := range entries {
+		if entry.Name == name {
 			return true
 		}
 	}

@@ -20,6 +20,19 @@ function M.check()
   else
     health.warn("Go engine not found. Fallback Lua engine will be used.")
   end
+
+  local ok_telescope = pcall(require, "telescope")
+  if ok_telescope then
+    health.ok("Telescope detected (CodeGuideTelescope available)")
+  else
+    health.info("Telescope not installed (optional)")
+  end
+
+  if vim.fn.has("nvim-0.10") == 1 then
+    health.ok("Neovim supports asynchronous vim.system")
+  else
+    health.warn("Neovim < 0.10 may fallback to synchronous shell execution")
+  end
 end
 
 return M

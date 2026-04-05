@@ -14,11 +14,14 @@ It is designed for onboarding, open source exploration, review, and debugging.
 - Entry point detection from naming and file-context heuristics.
 - Important function ranking using visibility, naming, proximity, and call relationships.
 - Execution flow extraction (`main -> startServer -> handleRequest`).
-- Focused signal rendering in-buffer with line highlights and virtual text.
-- Summary view via floating window.
+- Focused signal rendering in-buffer with line highlights, virtual text scores, and sign-column icons.
+- Winbar summary and optional breadcrumb signal (`require("codeguide").breadcrumb()`).
+- Interactive summary floating window (`<CR>` jumps to item) with flow tree rendering.
+- Telescope picker command (`:CodeGuideTelescope [important|entry]`) when telescope.nvim is installed.
 - Hybrid architecture:
   - Lua fallback engine (works out of the box)
   - optional Go engine (`codeguide-go`) for stronger AST-based analysis and cross-file package awareness.
+  - optional LSP enrichment (document symbols + incoming call hints).
 
 ## Requirements
 
@@ -63,16 +66,26 @@ Defaults:
 ```lua
 require("codeguide").setup({
   auto_analyze = true,
-  debounce_ms = 200,
+  debounce_ms = 500,
   max_functions = 6,
   max_flow_edges = 8,
   max_annotations = 6,
   highlight_annotations = true,
+  show_virtual_text = true,
+  show_signs = true,
+  show_winbar = true,
+  show_statusline_breadcrumb = true,
   notify_on_error = false,
+  lsp = {
+    enabled = true,
+    enrich = true,
+    timeout_ms = 800,
+  },
   go = {
     enabled = true,
     binary = "codeguide-go",
     timeout_ms = 1200,
+    async = true,
   },
 })
 ```
@@ -81,7 +94,14 @@ require("codeguide").setup({
 
 - `:CodeGuideAnalyze` analyze current buffer and render focused signals.
 - `:CodeGuideExplain` open a compact summary window.
+- `:CodeGuideTelescope [important|entry]` open Telescope picker for important functions or entry points.
 - `:CodeGuideClear` clear codeguide highlights for the current buffer.
+
+Statusline breadcrumb example:
+
+```lua
+vim.o.statusline = "%f %= %{v:lua.require('codeguide').breadcrumb()}"
+```
 
 ## Health Check
 

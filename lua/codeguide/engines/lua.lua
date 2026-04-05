@@ -460,6 +460,16 @@ function M.analyze(bufnr, opts)
   local ranked = rank_functions(functions, entries, outgoing, incoming, opts.max_functions)
   local flow = select_flow(entries, ranked, edges, opts.max_flow_edges)
 
+  local function_ranges = {}
+  for _, fn in ipairs(functions) do
+    function_ranges[#function_ranges + 1] = {
+      name = fn.name,
+      line = fn.line,
+      end_line = fn.end_line or fn.line,
+      file = file_path,
+    }
+  end
+
   return {
     source = "lua-fallback",
     file = file_path,
@@ -467,6 +477,7 @@ function M.analyze(bufnr, opts)
     important_functions = ranked,
     execution_flow = flow,
     annotations = annotations,
+    function_ranges = function_ranges,
   }
 end
 

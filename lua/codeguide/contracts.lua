@@ -35,6 +35,7 @@ function M.normalize(result, opts)
     important_functions = ensure_list(result and result.important_functions),
     execution_flow = ensure_list(result and result.execution_flow),
     annotations = ensure_list(result and result.annotations),
+    function_ranges = ensure_list(result and result.function_ranges),
   }
 
   sort_by_score(normalized.entry_points)
@@ -55,6 +56,23 @@ function M.normalize(result, opts)
 
   while #normalized.annotations > max_annotations do
     table.remove(normalized.annotations)
+  end
+
+  for _, item in ipairs(normalized.entry_points) do
+    item.file = item.file or normalized.file
+  end
+
+  for _, item in ipairs(normalized.important_functions) do
+    item.file = item.file or normalized.file
+  end
+
+  for _, edge in ipairs(normalized.execution_flow) do
+    edge.from_file = edge.from_file or normalized.file
+    edge.to_file = edge.to_file or normalized.file
+  end
+
+  for _, item in ipairs(normalized.function_ranges) do
+    item.file = item.file or normalized.file
   end
 
   return normalized

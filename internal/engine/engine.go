@@ -25,6 +25,7 @@ type Result struct {
 	ImportantFunctions []ImportantFunction `json:"important_functions"`
 	ExecutionFlow      []FlowEdge          `json:"execution_flow"`
 	Annotations        []Annotation        `json:"annotations"`
+	FunctionRanges     []FunctionRange     `json:"function_ranges"`
 }
 
 type EntryPoint struct {
@@ -32,6 +33,7 @@ type EntryPoint struct {
 	Line   int    `json:"line"`
 	Score  int    `json:"score"`
 	Reason string `json:"reason"`
+	File   string `json:"file,omitempty"`
 }
 
 type ImportantFunction struct {
@@ -39,12 +41,15 @@ type ImportantFunction struct {
 	Line       int    `json:"line"`
 	Score      int    `json:"score"`
 	Visibility string `json:"visibility"`
+	File       string `json:"file,omitempty"`
 }
 
 type FlowEdge struct {
-	From string `json:"from"`
-	To   string `json:"to"`
-	Line int    `json:"line"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Line     int    `json:"line"`
+	FromFile string `json:"from_file,omitempty"`
+	ToFile   string `json:"to_file,omitempty"`
 }
 
 type Annotation struct {
@@ -53,11 +58,19 @@ type Annotation struct {
 	Text string `json:"text"`
 }
 
+type FunctionRange struct {
+	Name    string `json:"name"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"end_line"`
+	File    string `json:"file,omitempty"`
+}
+
 type functionInfo struct {
 	Canonical string
 	Simple    string
 	File      string
 	Line      int
+	EndLine   int
 	Exported  bool
 	Calls     map[string]int
 }
@@ -126,9 +139,12 @@ func Analyze(opts Options) (Result, error) {
 	}
 
 	entries := chooseEntryPoints(absFile, targetFunctions)
+	hiddenEntries := collectHiddenEntryPoints(absFile, functions)
+	entries = mergeEntryPoints(entries, hiddenEntries)
 	edges, outgoing, incoming := buildEdges(functions)
 	important := rankFunctions(targetFunctions, entries, outgoing, incoming, opts.MaxFunctions)
 	flow := selectFlow(entries, important, edges, opts.MaxFlowEdges)
+	ranges := makeFunctionRanges(targetFunctions)
 
 	annotations, err := scanAnnotations(absFile)
 	if err != nil {
@@ -142,6 +158,7 @@ func Analyze(opts Options) (Result, error) {
 		ImportantFunctions: important,
 		ExecutionFlow:      flow,
 		Annotations:        annotations,
+		FunctionRanges:     ranges,
 	}, nil
 }
 
@@ -205,6 +222,7 @@ func collectFunctions(targetFile string, targetPackage string) ([]*functionInfo,
 				Simple:    simple,
 				File:      filepath.Clean(fileName),
 				Line:      fset.Position(fnDecl.Pos()).Line,
+				EndLine:   fset.Position(fnDecl.End()).Line,
 				Exported:  ast.IsExported(simple),
 				Calls:     map[string]int{},
 			}
@@ -296,6 +314,7 @@ func chooseEntryPoints(filePath string, funcs []*functionInfo) []EntryPoint {
 				Line:   fn.Line,
 				Score:  score,
 				Reason: "entry-like naming",
+				File:   fn.File,
 			})
 		}
 	}
@@ -313,6 +332,7 @@ func chooseEntryPoints(filePath string, funcs []*functionInfo) []EntryPoint {
 			Line:   funcs[0].Line,
 			Score:  1,
 			Reason: "first function in file",
+			File:   funcs[0].File,
 		})
 	}
 
@@ -431,6 +451,7 @@ func rankFunctions(funcs []*functionInfo, entries []EntryPoint, outgoing map[str
 			Line:       fn.Line,
 			Score:      score,
 			Visibility: visibility,
+			File:       fn.File,
 		})
 	}
 
@@ -462,13 +483,13 @@ func selectFlow(entries []EntryPoint, important []ImportantFunction, edges []edg
 		from := edge.From.Canonical
 		to := edge.To.Canonical
 		if interesting[from] || interesting[to] {
-			flow = append(flow, FlowEdge{From: from, To: to, Line: edge.Line})
+			flow = append(flow, FlowEdge{From: from, To: to, Line: edge.Line, FromFile: edge.From.File, ToFile: edge.To.File})
 		}
 	}
 
 	if len(flow) == 0 {
 		for _, edge := range edges {
-			flow = append(flow, FlowEdge{From: edge.From.Canonical, To: edge.To.Canonical, Line: edge.Line})
+			flow = append(flow, FlowEdge{From: edge.From.Canonical, To: edge.To.Canonical, Line: edge.Line, FromFile: edge.From.File, ToFile: edge.To.File})
 		}
 	}
 
@@ -521,6 +542,91 @@ func scoreName(name string) int {
 		}
 	}
 	return score
+}
+
+func collectHiddenEntryPoints(targetFile string, funcs []*functionInfo) []EntryPoint {
+	entries := make([]EntryPoint, 0)
+	for _, fn := range funcs {
+		if fn.Simple != "init" {
+			continue
+		}
+		score := 6
+		if filepath.Clean(fn.File) != filepath.Clean(targetFile) {
+			score += 1
+		}
+		entries = append(entries, EntryPoint{
+			Name:   fn.Canonical,
+			Line:   fn.Line,
+			Score:  score,
+			Reason: "hidden entry: init",
+			File:   fn.File,
+		})
+	}
+
+	for _, fn := range funcs {
+		if strings.EqualFold(fn.Simple, "ServeHTTP") || strings.EqualFold(fn.Simple, "Handle") {
+			entries = append(entries, EntryPoint{
+				Name:   fn.Canonical,
+				Line:   fn.Line,
+				Score:  5,
+				Reason: "hidden entry: interface hook",
+				File:   fn.File,
+			})
+		}
+	}
+
+	return entries
+}
+
+func mergeEntryPoints(primary []EntryPoint, extras []EntryPoint) []EntryPoint {
+	merged := make([]EntryPoint, 0, len(primary)+len(extras))
+	seen := map[string]bool{}
+
+	appendUnique := func(item EntryPoint) {
+		key := item.Name + ":" + item.File
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		merged = append(merged, item)
+	}
+
+	for _, item := range primary {
+		appendUnique(item)
+	}
+	for _, item := range extras {
+		appendUnique(item)
+	}
+
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].Score == merged[j].Score {
+			return merged[i].Line < merged[j].Line
+		}
+		return merged[i].Score > merged[j].Score
+	})
+
+	if len(merged) > 5 {
+		merged = merged[:5]
+	}
+
+	return merged
+}
+
+func makeFunctionRanges(funcs []*functionInfo) []FunctionRange {
+	ranges := make([]FunctionRange, 0, len(funcs))
+	for _, fn := range funcs {
+		endLine := fn.EndLine
+		if endLine < fn.Line {
+			endLine = fn.Line
+		}
+		ranges = append(ranges, FunctionRange{
+			Name:    fn.Canonical,
+			Line:    fn.Line,
+			EndLine: endLine,
+			File:    fn.File,
+		})
+	}
+	return ranges
 }
 
 func lineDistanceToEntry(line int, entries []EntryPoint) int {
