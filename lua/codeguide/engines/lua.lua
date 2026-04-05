@@ -175,11 +175,19 @@ local function collect_functions_treesitter(bufnr, ft, lines)
   local functions = {}
   local seen = {}
 
+  local function unwrap_capture(node)
+    if type(node) == "table" then
+      return node[1]
+    end
+    return node
+  end
+
   for _, match in query:iter_matches(root, bufnr, 0, -1) do
     local name_node
     local func_node
 
     for id, node in pairs(match) do
+      node = unwrap_capture(node)
       local capture = query.captures[id]
       if capture == "name" then
         name_node = node
@@ -189,9 +197,10 @@ local function collect_functions_treesitter(bufnr, ft, lines)
     end
 
     if name_node and func_node then
-      local name = vim.treesitter.get_node_text(name_node, bufnr)
-      if type(name) == "string" and name ~= "" then
-        local row_start, _, row_end, _ = func_node:range()
+      local ok_name, name = pcall(vim.treesitter.get_node_text, name_node, bufnr)
+      local ok_range, row_start, _, row_end, _ = pcall(func_node.range, func_node)
+
+      if ok_name and ok_range and type(name) == "string" and name ~= "" then
         local line = row_start + 1
         local key = name .. ":" .. tostring(line)
         if not seen[key] then
