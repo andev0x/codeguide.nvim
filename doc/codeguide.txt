@@ -1,0 +1,65 @@
+*codeguide.nvim*                Focused code-reading guide for Neovim
+
+==============================================================================
+CONTENTS                                                     *codeguide-contents*
+
+1. Intro.................................|codeguide-intro|
+2. Commands..............................|codeguide-commands|
+3. Configuration.........................|codeguide-configuration|
+4. Health Check..........................|codeguide-health|
+
+==============================================================================
+INTRO                                                           *codeguide-intro*
+
+codeguide.nvim highlights high-value signals in the current buffer:
+- entry points
+- important functions
+- compact execution flow
+- TODO/FIXME annotations
+
+It uses a Lua fallback engine and can optionally use `codeguide-go` for more
+accurate Go analysis.
+
+==============================================================================
+COMMANDS                                                     *codeguide-commands*
+
+:CodeGuideAnalyze
+        Analyze current buffer and render highlights.
+
+:CodeGuideExplain
+        Open a floating summary window.
+
+:CodeGuideClear
+        Clear codeguide extmarks from the current buffer.
+
+==============================================================================
+CONFIGURATION                                           *codeguide-configuration*
+
+>
+  require("codeguide").setup({
+    auto_analyze = true,
+    debounce_ms = 200,
+    max_functions = 6,
+    max_flow_edges = 8,
+    max_annotations = 6,
+    highlight_annotations = true,
+    notify_on_error = false,
+    go = {
+      enabled = true,
+      binary = "codeguide-go",
+      timeout_ms = 1200,
+    },
+  })
+<
+
+==============================================================================
+HEALTH CHECK                                                   *codeguide-health*
+
+Run:
+
+>
+  :checkhealth codeguide
+<
+
+==============================================================================
+vim:tw=78:ts=8:noet:ft=help:norl:
