@@ -1,45 +1,52 @@
 # codeguide.nvim
 
-`codeguide.nvim` is a Neovim plugin that helps you understand unfamiliar codebases quickly by showing:
+A Neovim plugin for rapid codebase comprehension and analysis. CodeGuide helps developers understand unfamiliar codebases by automatically identifying and visualizing the most important elements: entry points, critical functions, execution flows, and relevant annotations.
 
-- likely entry points
-- high-impact functions
-- a compact execution flow
-- relevant `TODO`/`FIXME` annotations
+Designed for onboarding, open-source exploration, code review, and debugging workflows.
 
-It is designed for onboarding, open source exploration, review, and debugging.
+## Demo
+<div align="center">
+  <img src="https://raw.githubusercontent.com/andev0x/description-image-archive/refs/heads/main/codeguide/codeguide.gif" width="70%" alt="codeguide.nvim plugin" />
+</div>
 
 ## Features
 
-- Entry point detection from naming and file-context heuristics.
-- Important function ranking using visibility, naming, proximity, and call relationships.
-- Split scoring for each function (`score = self_score + dependency_score`).
-- Complexity breakdown by type (`branching`, `nesting_depth`, `loops`, `calls`).
-- Function role inference (`orchestrator`, `utility`, `core-logic`) with role-aware assessment.
-- Execution flow extraction (`main -> startServer -> handleRequest`).
-- Execution flow contribution annotations (`callee (+self_score)`).
-- Hotspot detection and targeted refactor suggestions.
-- Function-group and module-level score summaries.
-- Data complexity insight (`nested_maps`, `struct_depth`, level).
-- Explicit score thresholds (`simple`, `moderate`, `complex`, `needs-refactoring`).
-- Focused signal rendering in-buffer with line highlights, virtual text scores, and sign-column icons.
-- Winbar summary and optional breadcrumb signal (`require("codeguide").breadcrumb()`).
-- Interactive summary floating window (`<CR>` jumps to item) with flow tree rendering.
-- Telescope picker command (`:CodeGuideTelescope [important|entry]`) when telescope.nvim is installed.
-- Hybrid architecture:
-  - Lua fallback engine (works out of the box)
-  - optional Go engine (`codeguide-go`) for stronger AST-based analysis and cross-file package awareness.
-  - optional LSP enrichment (document symbols + incoming call hints).
+### Core Analysis
+
+- Automatic entry point detection using naming conventions and file-context heuristics
+- Function importance ranking based on visibility, naming, proximity, and call relationships
+- Dual-component scoring system (self_score + dependency_score) for balanced assessment
+- Complexity analysis by category (branching, nesting depth, loops, call counts)
+- Function role classification (orchestrator, utility, core-logic) with contextual evaluation
+- Execution flow extraction and visualization
+- Hotspot identification with targeted refactoring suggestions
+- Data structure complexity insights
+- Comprehensive annotation detection (TODO, FIXME)
+
+### User Interface
+
+- In-buffer signal rendering with line highlights and virtual text scores
+- Integrated window bar summary with optional breadcrumb navigation
+- Interactive summary window with scrollable flow tree rendering
+- Line jumping on selection for rapid navigation
+- Telescope picker integration for efficient function browsing
+
+### Engine Support
+
+- Lua-based fallback engine (zero dependencies, works out of the box)
+- Optional Go engine for enhanced AST-based analysis and cross-file package awareness
+- Optional LSP integration for symbol enrichment and call hint analysis
+- Unified data contract across all engines for consistent UI rendering
 
 ## Requirements
 
-- Neovim `>= 0.9`
-- Treesitter parsers recommended for better fallback detection
-- Go `>= 1.22` only if you want to build/use the optional Go engine
+- Neovim 0.9 or later
+- Treesitter parsers (recommended for improved detection accuracy)
+- Go 1.22 or later (required only for building the optional Go engine)
 
-## Install
+## Installation
 
-### lazy.nvim
+### Using lazy.nvim
 
 ```lua
 {
@@ -56,56 +63,59 @@ It is designed for onboarding, open source exploration, review, and debugging.
 }
 ```
 
-### Build optional Go engine
+### Building the Optional Go Engine
+
+To enable the enhanced Go engine:
 
 ```bash
 go build -o bin/codeguide-go ./cmd/codeguide-go
 ```
 
-Then either:
-
-- add `bin` to `PATH`, or
-- configure `go.binary` with an absolute path.
+Then make the binary accessible via PATH or configure the absolute path in `go.binary`.
 
 ## Configuration
 
-Defaults:
+### Default Settings
 
 ```lua
 require("codeguide").setup({
-  auto_analyze = true,
-  debounce_ms = 500,
-  max_functions = 6,
-  max_flow_edges = 8,
-  max_annotations = 6,
-  highlight_annotations = true,
-  show_virtual_text = true,
-  show_signs = true,
-  show_winbar = true,
-  show_statusline_breadcrumb = true,
-  notify_on_error = false,
+  auto_analyze = true,           -- Enable automatic analysis on buffer open
+  debounce_ms = 500,             -- Debounce interval for analysis updates
+  max_functions = 6,             -- Maximum important functions to display
+  max_flow_edges = 8,            -- Maximum edges in execution flow visualization
+  max_annotations = 6,           -- Maximum annotations (TODO/FIXME) to show
+  highlight_annotations = true,  -- Enable annotation highlighting
+  show_virtual_text = true,      -- Show virtual text scores
+  show_signs = true,             -- Show signs in sign column
+  show_winbar = true,            -- Show window bar summary
+  show_statusline_breadcrumb = true,  -- Add breadcrumb to statusline
+  notify_on_error = false,       -- Show error notifications
   lsp = {
-    enabled = true,
-    enrich = true,
-    timeout_ms = 800,
+    enabled = true,              -- Enable LSP integration
+    enrich = true,               -- Enrich analysis with LSP data
+    timeout_ms = 800,            -- LSP request timeout
   },
   go = {
-    enabled = true,
-    binary = "codeguide-go",
-    timeout_ms = 1200,
-    async = true,
+    enabled = true,              -- Enable Go engine if available
+    binary = "codeguide-go",     -- Path to Go binary
+    timeout_ms = 1200,           -- Go engine timeout
+    async = true,                -- Run Go engine asynchronously
   },
 })
 ```
 
 ## Commands
 
-- `:CodeGuideAnalyze` analyze current buffer and render focused signals.
-- `:CodeGuideExplain` open a compact summary window.
-- `:CodeGuideTelescope [important|entry]` open Telescope picker for important functions or entry points.
-- `:CodeGuideClear` clear codeguide highlights for the current buffer.
+### Core Commands
 
-Statusline breadcrumb example:
+- `:CodeGuideAnalyze` - Analyze the current buffer and render visual signals
+- `:CodeGuideExplain` - Open an interactive summary window with function details
+- `:CodeGuideTelescope [important|entry]` - Browse functions using Telescope (when installed)
+- `:CodeGuideClear` - Clear all CodeGuide highlights from the current buffer
+
+### Statusline Integration
+
+Add CodeGuide breadcrumb navigation to your statusline:
 
 ```lua
 vim.o.statusline = "%f %= %{v:lua.require('codeguide').breadcrumb()}"
@@ -113,46 +123,55 @@ vim.o.statusline = "%f %= %{v:lua.require('codeguide').breadcrumb()}"
 
 ## Health Check
 
-Run:
+Verify your setup with:
 
 ```vim
 :checkhealth codeguide
 ```
 
-This validates Neovim compatibility and Go engine availability.
+This command validates Neovim compatibility and confirms Go engine availability.
 
 ## Data Contract
 
-Both engines return the same contract shape:
+Both the Lua and Go engines conform to the same unified data contract, ensuring consistent behavior across different analysis backends:
 
-- `entry_points`
-- `important_functions`
-- `execution_flow`
-- `annotations`
-- `score_thresholds`
-- `hotspots`
-- `function_groups`
-- `module_scores`
-- `data_complexity`
+- `entry_points` - Detected entry points in the module
+- `important_functions` - Functions ranked by importance score
+- `execution_flow` - Call chain flow from entry to leaf functions
+- `annotations` - TODO and FIXME markers with context
+- `score_thresholds` - Complexity classification levels
+- `hotspots` - Functions requiring refactoring attention
+- `function_groups` - Related functions grouped by context
+- `module_scores` - Aggregate scores by module
+- `data_complexity` - Structure complexity metrics
 
-This keeps UI rendering engine-agnostic.
+This abstraction keeps the UI rendering layer engine-agnostic and maintainable.
 
 ## Development
 
-Run Go tests:
+### Running Tests
+
+Execute the test suite:
 
 ```bash
 go test ./...
 ```
 
-See `CONTRIBUTING.md` for workflow details.
+### Contributing
+
+CodeGuide welcomes contributions. Please review the following documents:
+
+- `CONTRIBUTING.md` - Contribution workflow and guidelines
+- `CODE_OF_CONDUCT.md` - Community standards and expectations
+- `.github/workflows/ci.yml` - CI pipeline configuration
 
 ## License
 
-MIT. See `LICENSE`.
+This project is distributed under the MIT License. See the [LICENSE](License) file for details.
 
-## Community
+## Community and Support
 
-- Contribution guide: `CONTRIBUTING.md`
-- Code of conduct: `CODE_OF_CONDUCT.md`
-- CI: `.github/workflows/ci.yml`
+- Report issues and request features on GitHub
+- Contribute improvements via pull requests
+- Follow our Code of Conduct for respectful collaboration
+- Refer to [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines
