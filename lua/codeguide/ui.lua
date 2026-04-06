@@ -19,6 +19,12 @@ local function set_default_highlights()
   vim.api.nvim_set_hl(0, "CodeGuideFlowArrow", { default = true, fg = "#7DAEA3" })
   vim.api.nvim_set_hl(0, "CodeGuideWinbar", { default = true, fg = "#A89984", italic = true })
   vim.api.nvim_set_hl(0, "CodeGuideBreadcrumb", { default = true, fg = "#89B482" })
+  vim.api.nvim_set_hl(0, "CodeGuidePopupTitle", { default = true, fg = "#8EC07C", bold = true })
+  vim.api.nvim_set_hl(0, "CodeGuidePopupFunction", { default = true, fg = "#83A598", bold = true })
+  vim.api.nvim_set_hl(0, "CodeGuidePopupLocation", { default = true, fg = "#B8BB26" })
+  vim.api.nvim_set_hl(0, "CodeGuideTreeGlyph", { default = true, fg = "#FABD2F" })
+  vim.api.nvim_set_hl(0, "CodeGuidePopupScoreHot", { default = true, fg = "#FB4934", bold = true })
+  vim.api.nvim_set_hl(0, "CodeGuidePopupScoreWarm", { default = true, fg = "#FABD2F", bold = true })
 end
 
 local function define_signs()
@@ -94,10 +100,15 @@ local function flow_tree(result)
   local function render(node, prefix, is_last)
     local branch = is_last and "└─ " or "├─ "
     local row = prefix .. branch .. node
-    lines[#lines + 1] = row
+    lines[#lines + 1] = {
+      text = row,
+      node = node,
+    }
 
     if visited[node] then
-      lines[#lines + 1] = prefix .. (is_last and "   " or "│  ") .. "└─ ..."
+      lines[#lines + 1] = {
+        text = prefix .. (is_last and "   " or "│  ") .. "└─ ...",
+      }
       return
     end
 
@@ -110,7 +121,9 @@ local function flow_tree(result)
   end
 
   if #deduped == 0 then
-    return { "  none" }
+    return {
+      { text = "  none" },
+    }
   end
 
   for i, node in ipairs(deduped) do
@@ -118,6 +131,54 @@ local function flow_tree(result)
   end
 
   return lines
+end
+
+local function normalize_name(name)
+  if type(name) ~= "string" then
+    return ""
+  end
+  return name:match("([^.]+)$") or name
+end
+
+local function build_jump_lookup(result)
+  local lookup = {}
+
+  local function upsert(name, line, file)
+    if type(name) ~= "string" or name == "" then
+      return
+    end
+
+    local current = lookup[name]
+    if (not current) or ((line or 0) < (current.line or 0)) then
+      lookup[name] = {
+        name = name,
+        line = line,
+        file = file,
+      }
+    end
+
+    local simple = normalize_name(name)
+    local by_simple = lookup[simple]
+    if (not by_simple) or ((line or 0) < (by_simple.line or 0)) then
+      lookup[simple] = {
+        name = simple,
+        line = line,
+        file = file,
+      }
+    end
+  end
+
+  for _, item in ipairs(result.entry_points or {}) do
+    upsert(item.name, item.line, item.file or result.file)
+  end
+  for _, item in ipairs(result.important_functions or {}) do
+    upsert(item.name, item.line, item.file or result.file)
+  end
+  for _, item in ipairs(result.function_ranges or {}) do
+    upsert(item.name, item.line, item.file or result.file)
+  end
+
+  return lookup
 end
 
 local function get_current_win_for_buf(bufnr)
@@ -139,6 +200,11 @@ local function make_summary_lines(result)
     "  Entry Points:",
   }
   local jump_index = {}
+  local jump_lookup = build_jump_lookup(result)
+  local max_name_width = 0
+  for _, item in ipairs(result.important_functions or {}) do
+    max_name_width = math.max(max_name_width, vim.fn.strdisplaywidth(item.name or ""))
+  end
 
   if #result.entry_points == 0 then
     lines[#lines + 1] = "    - none"
@@ -159,7 +225,9 @@ local function make_summary_lines(result)
     lines[#lines + 1] = "    - none"
   else
     for _, item in ipairs(result.important_functions) do
-      lines[#lines + 1] = string.format("    - %s (score %d, %s:%d)", item.name, item.score or 0, vim.fn.fnamemodify(item.file or result.file, ":t"), item.line)
+      local name = item.name or ""
+      local pad = math.max(max_name_width - vim.fn.strdisplaywidth(name), 0)
+      lines[#lines + 1] = string.format("    - %s%s  score:%3d  (%s:%d)", name, string.rep(" ", pad), item.score or 0, vim.fn.fnamemodify(item.file or result.file, ":t"), item.line)
       jump_index[#lines] = {
         name = item.name,
         line = item.line,
@@ -171,7 +239,17 @@ local function make_summary_lines(result)
   lines[#lines + 1] = ""
   lines[#lines + 1] = "  Execution Flow (tree):"
   for _, row in ipairs(flow_tree(result)) do
-    lines[#lines + 1] = "    " .. row
+    lines[#lines + 1] = "    " .. row.text
+    if row.node then
+      local mapped = jump_lookup[row.node] or jump_lookup[normalize_name(row.node)]
+      if mapped then
+        jump_index[#lines] = {
+          name = mapped.name,
+          line = mapped.line,
+          file = mapped.file or result.file,
+        }
+      end
+    end
   end
 
   lines[#lines + 1] = ""
@@ -215,13 +293,6 @@ local function join_entry_names(result, current_file)
   return table.concat(names, ", ")
 end
 
-local function normalize_name(name)
-  if type(name) ~= "string" then
-    return ""
-  end
-  return name:match("([^.]+)$") or name
-end
-
 local function function_at_cursor(bufnr, cursor_line, result)
   local current_file = vim.api.nvim_buf_get_name(bufnr)
   for _, item in ipairs(result.function_ranges or {}) do
@@ -233,6 +304,57 @@ local function function_at_cursor(bufnr, cursor_line, result)
     end
   end
   return nil
+end
+
+local function add_highlight(bufnr, group, line, col_start, col_end)
+  if col_start < col_end then
+    pcall(vim.api.nvim_buf_add_highlight, bufnr, namespace, group, line, col_start, col_end)
+  end
+end
+
+local function highlight_tree_glyphs(bufnr, line_idx, text)
+  local from = 1
+  while true do
+    local s, e = text:find("[├└│─]", from)
+    if not s then
+      break
+    end
+    add_highlight(bufnr, "CodeGuideTreeGlyph", line_idx, s - 1, e)
+    from = e + 1
+  end
+end
+
+local function highlight_summary(bufnr, lines, jump_index)
+  for i, text in ipairs(lines) do
+    local line_idx = i - 1
+
+    if i == 1 then
+      add_highlight(bufnr, "CodeGuidePopupTitle", line_idx, 2, #text)
+    end
+
+    local jump = jump_index[i]
+    if jump and jump.name then
+      local fn_start, fn_end = text:find(jump.name, 1, true)
+      if fn_start and fn_end then
+        add_highlight(bufnr, "CodeGuidePopupFunction", line_idx, fn_start - 1, fn_end)
+      end
+    end
+
+    local loc_start, loc_end = text:find("%([^:]+:%d+%)")
+    if loc_start and loc_end then
+      add_highlight(bufnr, "CodeGuidePopupLocation", line_idx, loc_start - 1, loc_end)
+    end
+
+    local score_start, score_end, score_value = text:find("score:%s*(%d+)")
+    if score_start and score_end then
+      local hl = tonumber(score_value or "0") > 10 and "CodeGuidePopupScoreHot" or "CodeGuidePopupScoreWarm"
+      add_highlight(bufnr, hl, line_idx, score_start - 1, score_end)
+    end
+
+    if text:find("[├└│─]", 1) then
+      highlight_tree_glyphs(bufnr, line_idx, text)
+    end
+  end
 end
 
 local function build_breadcrumb(result, fn)
@@ -391,6 +513,7 @@ function M.show_summary(result)
   local lines, jump_index = make_summary_lines(result)
   local buffer = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, lines)
+  highlight_summary(buffer, lines, jump_index)
   vim.bo[buffer].bufhidden = "wipe"
   vim.bo[buffer].modifiable = false
 
@@ -410,6 +533,9 @@ function M.show_summary(result)
     title = " codeguide.nvim ",
     title_pos = "center",
   })
+
+  vim.wo[window].cursorline = true
+  vim.wo[window].wrap = false
 
   vim.keymap.set("n", "q", function()
     if vim.api.nvim_win_is_valid(window) then
