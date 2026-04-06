@@ -5,6 +5,86 @@ local SYMBOL_KINDS = {
   [12] = true, -- Function
 }
 
+local function score_band(score)
+  if score <= 5 then
+    return "simple"
+  end
+  if score <= 10 then
+    return "moderate"
+  end
+  if score <= 20 then
+    return "complex"
+  end
+  return "needs-refactoring"
+end
+
+local function role_assessment(role, score)
+  if role == "orchestrator" then
+    if score <= 20 then
+      return "acceptable"
+    end
+    if score <= 30 then
+      return "monitor"
+    end
+    return "should-optimize"
+  end
+
+  if role == "utility" then
+    if score <= 5 then
+      return "acceptable"
+    end
+    if score <= 10 then
+      return "should-optimize"
+    end
+    return "needs-refactoring"
+  end
+
+  if score <= 10 then
+    return "acceptable"
+  end
+  if score <= 20 then
+    return "monitor"
+  end
+  return "needs-refactoring"
+end
+
+local function refresh_item(item)
+  item.score = item.score or 0
+  item.self_score = item.self_score or 0
+  item.dependency_score = item.dependency_score or 0
+  if item.score == 0 and (item.self_score > 0 or item.dependency_score > 0) then
+    item.score = item.self_score + item.dependency_score
+  end
+  if item.score > 0 and item.self_score == 0 and item.dependency_score == 0 then
+    item.self_score = item.score
+  end
+  item.score = (item.self_score or 0) + (item.dependency_score or 0)
+  item.role = item.role or "core-logic"
+  item.threshold = score_band(item.score)
+  item.role_assessment = role_assessment(item.role, item.score)
+  item.breakdown = item.breakdown or {
+    branching = 0,
+    nesting_depth = 0,
+    loops = 0,
+    calls = 0,
+  }
+  item.data_complexity = item.data_complexity or {
+    nested_maps = 0,
+    struct_depth = 0,
+    level = "low",
+  }
+end
+
+local function boost_item(item, delta, mode)
+  refresh_item(item)
+  if mode == "dependency" then
+    item.dependency_score = (item.dependency_score or 0) + delta
+  else
+    item.self_score = (item.self_score or 0) + delta
+  end
+  refresh_item(item)
+end
+
 local function text_document(bufnr)
   return { uri = vim.uri_from_bufnr(bufnr) }
 end
@@ -159,28 +239,65 @@ function M.enrich(bufnr, result, opts)
     for _, symbol in ipairs(symbols) do
       local important = find_by_name(result.important_functions, symbol.name)
       if important then
-        important.score = (important.score or 0) + 2
+        boost_item(important, 2, "self")
       elseif not seen_important[symbol.name] then
-        result.important_functions[#result.important_functions + 1] = {
+        local added = {
           name = symbol.name,
           line = symbol.line,
           score = 2,
+          self_score = 2,
+          dependency_score = 0,
+          breakdown = {
+            branching = 0,
+            nesting_depth = 0,
+            loops = 0,
+            calls = 0,
+          },
+          role = "utility",
+          threshold = "simple",
+          role_assessment = "acceptable",
+          data_complexity = {
+            nested_maps = 0,
+            struct_depth = 0,
+            level = "low",
+          },
           visibility = "public",
           reason = "lsp-symbol",
           file = result.file,
         }
+        refresh_item(added)
+        result.important_functions[#result.important_functions + 1] = added
         seen_important[symbol.name] = true
       end
 
       if symbol.name == "main" or symbol.name == "init" then
         if not seen_entry[symbol.name] then
-          result.entry_points[#result.entry_points + 1] = {
+          local added_entry = {
             name = symbol.name,
             line = symbol.line,
             score = 4,
+            self_score = 4,
+            dependency_score = 0,
+            entry_score = 4,
+            breakdown = {
+              branching = 0,
+              nesting_depth = 0,
+              loops = 0,
+              calls = 0,
+            },
+            role = "utility",
+            threshold = "simple",
+            role_assessment = "acceptable",
+            data_complexity = {
+              nested_maps = 0,
+              struct_depth = 0,
+              level = "low",
+            },
             reason = "lsp-symbol",
             file = result.file,
           }
+          refresh_item(added_entry)
+          result.entry_points[#result.entry_points + 1] = added_entry
           seen_entry[symbol.name] = true
         end
       end
@@ -193,7 +310,7 @@ function M.enrich(bufnr, result, opts)
       end
       local incoming = count_incoming_calls(bufnr, item.line or 1, timeout)
       if incoming > 0 then
-        item.score = (item.score or 0) + math.min(incoming, 3)
+        boost_item(item, math.min(incoming, 3), "dependency")
       end
       boosted = boosted + 1
     end

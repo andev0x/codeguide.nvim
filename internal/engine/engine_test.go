@@ -42,6 +42,22 @@ func handleRequest() {}
 		t.Fatalf("expected main as entry point, got %#v", result.EntryPoints)
 	}
 
+	if result.EntryPoints[0].SelfScore <= 0 {
+		t.Fatalf("expected entry point self score, got %#v", result.EntryPoints[0])
+	}
+
+	if result.EntryPoints[0].Score != result.EntryPoints[0].SelfScore+result.EntryPoints[0].DependencyScore {
+		t.Fatalf("entry score should split into self + deps, got %#v", result.EntryPoints[0])
+	}
+
+	if result.EntryPoints[0].Breakdown.Calls == 0 {
+		t.Fatalf("expected complexity breakdown with calls, got %#v", result.EntryPoints[0].Breakdown)
+	}
+
+	if result.EntryPoints[0].Role == "" || result.EntryPoints[0].Threshold == "" || result.EntryPoints[0].RoleAssessment == "" {
+		t.Fatalf("expected role metadata, got %#v", result.EntryPoints[0])
+	}
+
 	if len(result.Annotations) == 0 || result.Annotations[0].Kind != "TODO" {
 		t.Fatalf("expected TODO annotation, got %#v", result.Annotations)
 	}
@@ -54,8 +70,28 @@ func handleRequest() {}
 		t.Fatalf("expected startServer -> handleRequest edge, got %#v", result.ExecutionFlow)
 	}
 
+	if !hasContribution(result.ExecutionFlow, "main", "startServer") {
+		t.Fatalf("expected flow contribution for main -> startServer, got %#v", result.ExecutionFlow)
+	}
+
 	if len(result.FunctionRanges) == 0 {
 		t.Fatalf("expected function ranges in result")
+	}
+
+	if len(result.ScoreThresholds) == 0 {
+		t.Fatalf("expected score thresholds in result")
+	}
+
+	if len(result.FunctionGroups) == 0 {
+		t.Fatalf("expected grouped function data in result")
+	}
+
+	if len(result.ModuleScores) == 0 {
+		t.Fatalf("expected module scores in result")
+	}
+
+	if result.DataComplexity.Level == "" {
+		t.Fatalf("expected data complexity insight in result")
 	}
 }
 
@@ -99,6 +135,15 @@ func containsEdge(edges []FlowEdge, from string, to string) bool {
 func containsEntry(entries []EntryPoint, name string) bool {
 	for _, entry := range entries {
 		if entry.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasContribution(edges []FlowEdge, from string, to string) bool {
+	for _, edge := range edges {
+		if edge.From == from && edge.To == to && edge.Contribution >= 0 {
 			return true
 		}
 	}

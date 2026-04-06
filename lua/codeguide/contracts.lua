@@ -18,6 +18,17 @@ local function sort_by_score(items)
   end)
 end
 
+local function sort_entry_points(items)
+  table.sort(items, function(a, b)
+    local left = a.entry_score or a.score or 0
+    local right = b.entry_score or b.score or 0
+    if left == right then
+      return (a.line or 0) < (b.line or 0)
+    end
+    return left > right
+  end)
+end
+
 local function sort_annotations(items)
   table.sort(items, function(a, b)
     if (a.line or 0) == (b.line or 0) then
@@ -36,9 +47,14 @@ function M.normalize(result, opts)
     execution_flow = ensure_list(result and result.execution_flow),
     annotations = ensure_list(result and result.annotations),
     function_ranges = ensure_list(result and result.function_ranges),
+    score_thresholds = ensure_list(result and result.score_thresholds),
+    hotspots = ensure_list(result and result.hotspots),
+    function_groups = ensure_list(result and result.function_groups),
+    module_scores = ensure_list(result and result.module_scores),
+    data_complexity = result and result.data_complexity,
   }
 
-  sort_by_score(normalized.entry_points)
+  sort_entry_points(normalized.entry_points)
   sort_by_score(normalized.important_functions)
   sort_annotations(normalized.annotations)
 
@@ -58,6 +74,18 @@ function M.normalize(result, opts)
     table.remove(normalized.annotations)
   end
 
+  while #normalized.hotspots > 8 do
+    table.remove(normalized.hotspots)
+  end
+
+  while #normalized.function_groups > 5 do
+    table.remove(normalized.function_groups)
+  end
+
+  while #normalized.module_scores > 8 do
+    table.remove(normalized.module_scores)
+  end
+
   for _, item in ipairs(normalized.entry_points) do
     item.file = item.file or normalized.file
   end
@@ -74,6 +102,21 @@ function M.normalize(result, opts)
   for _, item in ipairs(normalized.function_ranges) do
     item.file = item.file or normalized.file
   end
+
+  for _, item in ipairs(normalized.hotspots) do
+    item.file = item.file or normalized.file
+  end
+
+  if type(normalized.data_complexity) ~= "table" then
+    normalized.data_complexity = {
+      level = "low",
+      nested_maps = 0,
+      struct_depth = 0,
+      types = {},
+    }
+  end
+
+  normalized.data_complexity.types = ensure_list(normalized.data_complexity.types)
 
   return normalized
 end

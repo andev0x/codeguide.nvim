@@ -17,6 +17,14 @@ codeguide.nvim highlights high-value signals in the current buffer:
 - compact execution flow
 - TODO/FIXME annotations
 
+It also reports:
+- split scores (self vs dependency)
+- complexity breakdown (branching, nesting, loops, calls)
+- inferred function role and role-aware assessment
+- hotspot list with refactor suggestions
+- grouped and module-level scores
+- data complexity signals
+
 It uses a Lua fallback engine and can optionally use `codeguide-go` for more
 accurate Go analysis.
 
