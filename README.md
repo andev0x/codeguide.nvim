@@ -13,7 +13,15 @@ It is designed for onboarding, open source exploration, review, and debugging.
 
 - Entry point detection from naming and file-context heuristics.
 - Important function ranking using visibility, naming, proximity, and call relationships.
+- Split scoring for each function (`score = self_score + dependency_score`).
+- Complexity breakdown by type (`branching`, `nesting_depth`, `loops`, `calls`).
+- Function role inference (`orchestrator`, `utility`, `core-logic`) with role-aware assessment.
 - Execution flow extraction (`main -> startServer -> handleRequest`).
+- Execution flow contribution annotations (`callee (+self_score)`).
+- Hotspot detection and targeted refactor suggestions.
+- Function-group and module-level score summaries.
+- Data complexity insight (`nested_maps`, `struct_depth`, level).
+- Explicit score thresholds (`simple`, `moderate`, `complex`, `needs-refactoring`).
 - Focused signal rendering in-buffer with line highlights, virtual text scores, and sign-column icons.
 - Winbar summary and optional breadcrumb signal (`require("codeguide").breadcrumb()`).
 - Interactive summary floating window (`<CR>` jumps to item) with flow tree rendering.
@@ -121,6 +129,11 @@ Both engines return the same contract shape:
 - `important_functions`
 - `execution_flow`
 - `annotations`
+- `score_thresholds`
+- `hotspots`
+- `function_groups`
+- `module_scores`
+- `data_complexity`
 
 This keeps UI rendering engine-agnostic.
 

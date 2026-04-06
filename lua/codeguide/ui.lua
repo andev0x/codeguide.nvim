@@ -43,27 +43,36 @@ local function define_signs()
 end
 
 local function score_group(score)
-  if score >= 12 then
+  if score >= 21 then
     return "CodeGuideScoreHigh"
   end
-  if score >= 7 then
+  if score >= 11 then
     return "CodeGuideScoreMid"
   end
   return "CodeGuideScoreLow"
 end
 
-local function score_chunk(score)
-  return { string.format(" [score:%d]", score or 0), score_group(score or 0) }
+local function score_chunk(item)
+  local score = (item and item.score) or 0
+  local self_score = (item and item.self_score) or score
+  local dependency_score = (item and item.dependency_score) or 0
+  return {
+    string.format(" [score:%d self:%d deps:%d]", score, self_score, dependency_score),
+    score_group(score),
+  }
 end
 
 local function flow_tree(result)
   local children = {}
+  local contributions = {}
   local indegree = {}
   local nodes = {}
 
   for _, edge in ipairs(result.execution_flow or {}) do
     children[edge.from] = children[edge.from] or {}
     children[edge.from][#children[edge.from] + 1] = edge.to
+    contributions[edge.from] = contributions[edge.from] or {}
+    contributions[edge.from][edge.to] = edge.contribution or 0
     nodes[edge.from] = true
     nodes[edge.to] = true
     indegree[edge.to] = (indegree[edge.to] or 0) + 1
@@ -97,9 +106,12 @@ local function flow_tree(result)
   local lines = {}
   local visited = {}
 
-  local function render(node, prefix, is_last)
+  local function render(node, prefix, is_last, parent)
     local branch = is_last and "└─ " or "├─ "
     local row = prefix .. branch .. node
+    if parent and contributions[parent] and contributions[parent][node] then
+      row = row .. string.format(" (+%d)", contributions[parent][node])
+    end
     lines[#lines + 1] = {
       text = row,
       node = node,
@@ -116,7 +128,7 @@ local function flow_tree(result)
     local next_nodes = children[node] or {}
     for i, child in ipairs(next_nodes) do
       local next_prefix = prefix .. (is_last and "   " or "│  ")
-      render(child, next_prefix, i == #next_nodes)
+      render(child, next_prefix, i == #next_nodes, node)
     end
   end
 
@@ -127,7 +139,7 @@ local function flow_tree(result)
   end
 
   for i, node in ipairs(deduped) do
-    render(node, "", i == #deduped)
+    render(node, "", i == #deduped, nil)
   end
 
   return lines
@@ -191,13 +203,42 @@ local function get_current_win_for_buf(bufnr)
   return wins[1]
 end
 
+local function threshold_label(item)
+  if not item then
+    return ""
+  end
+  if item.max and item.max >= 0 then
+    return string.format("%s:%d-%d", item.label or "", item.min or 0, item.max)
+  end
+  return string.format("%s:%d+", item.label or "", item.min or 0)
+end
+
+local function metric_breakdown(item)
+  local breakdown = (item and item.breakdown) or {}
+  return string.format(
+    "branching:%d nesting:%d loops:%d calls:%d",
+    breakdown.branching or 0,
+    breakdown.nesting_depth or 0,
+    breakdown.loops or 0,
+    breakdown.calls or 0
+  )
+end
+
+local function data_breakdown(item)
+  local data = (item and item.data_complexity) or {}
+  return string.format(
+    "data:%s maps:%d struct-depth:%d",
+    data.level or "low",
+    data.nested_maps or 0,
+    data.struct_depth or 0
+  )
+end
+
 local function make_summary_lines(result)
   local lines = {
     "  CodeGuide",
     "",
     "  Engine: " .. result.source,
-    "",
-    "  Entry Points:",
   }
   local jump_index = {}
   local jump_lookup = build_jump_lookup(result)
@@ -206,16 +247,74 @@ local function make_summary_lines(result)
     max_name_width = math.max(max_name_width, vim.fn.strdisplaywidth(item.name or ""))
   end
 
-  if #result.entry_points == 0 then
+  lines[#lines + 1] = "  Thresholds:"
+  if #(result.score_thresholds or {}) == 0 then
+    lines[#lines + 1] = "    - simple:0-5, moderate:6-10, complex:11-20, needs-refactoring:21+"
+  else
+    local chunks = {}
+    for _, item in ipairs(result.score_thresholds or {}) do
+      chunks[#chunks + 1] = threshold_label(item)
+    end
+    lines[#lines + 1] = "    - " .. table.concat(chunks, " | ")
+  end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "  Hotspots:"
+  if #(result.hotspots or {}) == 0 then
     lines[#lines + 1] = "    - none"
   else
-    for _, item in ipairs(result.entry_points) do
-      lines[#lines + 1] = string.format("    - %s (%s:%d)", item.name, vim.fn.fnamemodify(item.file or result.file, ":t"), item.line)
+    for _, item in ipairs(result.hotspots or {}) do
+      local role = item.role or "core-logic"
+      lines[#lines + 1] = string.format(
+        "    - %s score:%d (%s, %s:%d)",
+        item.name or "?",
+        item.score or 0,
+        role,
+        vim.fn.fnamemodify(item.file or result.file, ":t"),
+        item.line or 0
+      )
       jump_index[#lines] = {
         name = item.name,
         line = item.line,
         file = item.file or result.file,
       }
+      lines[#lines + 1] = string.format("      reason: %s", item.reason or "")
+      if item.suggestion and item.suggestion ~= "" then
+        lines[#lines + 1] = string.format("      suggestion: %s", item.suggestion)
+      end
+    end
+  end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "  Entry Points:"
+
+  if #result.entry_points == 0 then
+    lines[#lines + 1] = "    - none"
+  else
+    for _, item in ipairs(result.entry_points) do
+      lines[#lines + 1] = string.format(
+        "    - %s  score:%3d (self:%d deps:%d entry:%d)  role:%s/%s  [%s]  (%s:%d)",
+        item.name,
+        item.score or 0,
+        item.self_score or 0,
+        item.dependency_score or 0,
+        item.entry_score or 0,
+        item.role or "core-logic",
+        item.role_assessment or "acceptable",
+        item.threshold or "simple",
+        vim.fn.fnamemodify(item.file or result.file, ":t"),
+        item.line
+      )
+      jump_index[#lines] = {
+        name = item.name,
+        line = item.line,
+        file = item.file or result.file,
+      }
+      lines[#lines + 1] = "      " .. metric_breakdown(item)
+      lines[#lines + 1] = "      " .. data_breakdown(item)
+      if item.suggestions and item.suggestions[1] then
+        lines[#lines + 1] = "      suggestion: " .. item.suggestions[1]
+      end
     end
   end
 
@@ -227,13 +326,80 @@ local function make_summary_lines(result)
     for _, item in ipairs(result.important_functions) do
       local name = item.name or ""
       local pad = math.max(max_name_width - vim.fn.strdisplaywidth(name), 0)
-      lines[#lines + 1] = string.format("    - %s%s  score:%3d  (%s:%d)", name, string.rep(" ", pad), item.score or 0, vim.fn.fnamemodify(item.file or result.file, ":t"), item.line)
+      lines[#lines + 1] = string.format(
+        "    - %s%s  score:%3d  (self:%d deps:%d)  role:%s/%s [%s]  (%s:%d)",
+        name,
+        string.rep(" ", pad),
+        item.score or 0,
+        item.self_score or 0,
+        item.dependency_score or 0,
+        item.role or "core-logic",
+        item.role_assessment or "acceptable",
+        item.threshold or "simple",
+        vim.fn.fnamemodify(item.file or result.file, ":t"),
+        item.line
+      )
       jump_index[#lines] = {
         name = item.name,
         line = item.line,
         file = item.file or result.file,
       }
+      lines[#lines + 1] = "      " .. metric_breakdown(item)
+      lines[#lines + 1] = "      " .. data_breakdown(item)
+      if item.suggestions and item.suggestions[1] then
+        lines[#lines + 1] = "      suggestion: " .. item.suggestions[1]
+      end
     end
+  end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "  Function Groups:"
+  if #(result.function_groups or {}) == 0 then
+    lines[#lines + 1] = "    - none"
+  else
+    for _, group in ipairs(result.function_groups or {}) do
+      lines[#lines + 1] = string.format(
+        "    - %s  score:%d  functions:%d  kind:%s",
+        group.name or "group",
+        group.score or 0,
+        group.function_count or 0,
+        group.kind or "call-graph"
+      )
+    end
+  end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "  Module Scores:"
+  if #(result.module_scores or {}) == 0 then
+    lines[#lines + 1] = "    - none"
+  else
+    for _, module in ipairs(result.module_scores or {}) do
+      lines[#lines + 1] = string.format(
+        "    - %s  score:%d  functions:%d",
+        module.module or "module",
+        module.score or 0,
+        module.function_count or 0
+      )
+    end
+  end
+
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "  Data Complexity:"
+  local data = result.data_complexity or {}
+  lines[#lines + 1] = string.format(
+    "    - level:%s nested_maps:%d struct_depth:%d",
+    data.level or "low",
+    data.nested_maps or 0,
+    data.struct_depth or 0
+  )
+  for _, item in ipairs(data.types or {}) do
+    lines[#lines + 1] = string.format(
+      "    - type %s maps:%d struct-depth:%d (%s)",
+      item.name or "?",
+      item.nested_maps or 0,
+      item.struct_depth or 0,
+      vim.fn.fnamemodify(item.file or result.file, ":t")
+    )
   end
 
   lines[#lines + 1] = ""
@@ -347,7 +513,7 @@ local function highlight_summary(bufnr, lines, jump_index)
 
     local score_start, score_end, score_value = text:find("score:%s*(%d+)")
     if score_start and score_end then
-      local hl = tonumber(score_value or "0") > 10 and "CodeGuidePopupScoreHot" or "CodeGuidePopupScoreWarm"
+      local hl = tonumber(score_value or "0") > 20 and "CodeGuidePopupScoreHot" or "CodeGuidePopupScoreWarm"
       add_highlight(bufnr, hl, line_idx, score_start - 1, score_end)
     end
 
@@ -417,7 +583,7 @@ function M.render(bufnr, result, opts, base_winbar)
         vim.api.nvim_buf_set_extmark(bufnr, namespace, line, 0, {
           virt_text = {
             { " entry " .. entry.name, "CodeGuideEntryVirtual" },
-            score_chunk(entry.score),
+            score_chunk(entry),
           },
           virt_text_pos = "eol",
           priority = 180,
@@ -443,7 +609,7 @@ function M.render(bufnr, result, opts, base_winbar)
         vim.api.nvim_buf_set_extmark(bufnr, namespace, line, 0, {
           virt_text = {
             { " focus " .. fn.name, "CodeGuideImportantVirtual" },
-            score_chunk(fn.score),
+            score_chunk(fn),
           },
           virt_text_pos = "eol",
           priority = 160,

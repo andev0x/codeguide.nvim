@@ -33,6 +33,13 @@ local ENTRY_FILE_HINTS = {
   ["server"] = true,
 }
 
+local SCORE_THRESHOLDS = {
+  { label = "simple", min = 0, max = 5 },
+  { label = "moderate", min = 6, max = 10 },
+  { label = "complex", min = 11, max = 20 },
+  { label = "needs-refactoring", min = 21, max = -1 },
+}
+
 local TS_QUERIES = {
   lua = [[
     (function_declaration name: (identifier) @name) @func
@@ -61,6 +68,59 @@ local TS_QUERIES = {
 
 local function basename(path)
   return vim.fn.fnamemodify(path, ":t:r"):lower()
+end
+
+local function score_band(score)
+  if score <= 5 then
+    return "simple"
+  end
+  if score <= 10 then
+    return "moderate"
+  end
+  if score <= 20 then
+    return "complex"
+  end
+  return "needs-refactoring"
+end
+
+local function role_assessment(role, score)
+  if role == "orchestrator" then
+    if score <= 20 then
+      return "acceptable"
+    end
+    if score <= 30 then
+      return "monitor"
+    end
+    return "should-optimize"
+  end
+
+  if role == "utility" then
+    if score <= 5 then
+      return "acceptable"
+    end
+    if score <= 10 then
+      return "should-optimize"
+    end
+    return "needs-refactoring"
+  end
+
+  if score <= 10 then
+    return "acceptable"
+  end
+  if score <= 20 then
+    return "monitor"
+  end
+  return "needs-refactoring"
+end
+
+local function data_complexity_level(nested_maps, struct_depth)
+  if nested_maps >= 3 or struct_depth >= 4 then
+    return "high"
+  end
+  if nested_maps >= 2 or struct_depth >= 2 then
+    return "medium"
+  end
+  return "low"
 end
 
 local function visibility_for(ft, name, line)
@@ -138,6 +198,23 @@ local function collect_functions_regex(ft, lines)
         line = index,
         visibility = visibility_for(ft, name, line),
         score = 0,
+        self_score = 0,
+        dependency_score = 0,
+        entry_score = 0,
+        branching = 0,
+        nesting_depth = 0,
+        loops = 0,
+        call_count = 0,
+        role = "core-logic",
+        threshold = "simple",
+        role_assessment = "acceptable",
+        hotspots = {},
+        suggestions = {},
+        data_complexity = {
+          nested_maps = 0,
+          struct_depth = 0,
+          level = "low",
+        },
       }
     end
   end
@@ -211,6 +288,23 @@ local function collect_functions_treesitter(bufnr, ft, lines)
             end_line = math.max(row_end + 1, line),
             visibility = visibility_for(ft, name, lines[line] or ""),
             score = 0,
+            self_score = 0,
+            dependency_score = 0,
+            entry_score = 0,
+            branching = 0,
+            nesting_depth = 0,
+            loops = 0,
+            call_count = 0,
+            role = "core-logic",
+            threshold = "simple",
+            role_assessment = "acceptable",
+            hotspots = {},
+            suggestions = {},
+            data_complexity = {
+              nested_maps = 0,
+              struct_depth = 0,
+              level = "low",
+            },
           }
         end
       end
@@ -268,13 +362,6 @@ local function collect_edges(lines, functions)
   local edges = {}
   local seen = {}
   local by_name = function_map(functions)
-  local outgoing = {}
-  local incoming = {}
-
-  for _, fn in ipairs(functions) do
-    outgoing[fn.name] = 0
-    incoming[fn.name] = 0
-  end
 
   for _, fn in ipairs(functions) do
     for line_nr = fn.line, fn.end_line do
@@ -289,9 +376,8 @@ local function collect_edges(lines, functions)
                 from = fn.name,
                 to = callee,
                 line = line_nr,
+                contribution = by_name[callee].self_score or 0,
               }
-              outgoing[fn.name] = outgoing[fn.name] + 1
-              incoming[callee] = incoming[callee] + 1
             end
           end
         end
@@ -299,7 +385,7 @@ local function collect_edges(lines, functions)
     end
   end
 
-  return edges, outgoing, incoming
+  return edges
 end
 
 local function score_name(name)
@@ -313,42 +399,254 @@ local function score_name(name)
   return score
 end
 
+local function count_pattern(line, pattern)
+  local count = 0
+  local start = 1
+  while true do
+    local s, e = line:find(pattern, start)
+    if not s then
+      break
+    end
+    count = count + 1
+    start = e + 1
+  end
+  return count
+end
+
+local function derive_hotspots_and_suggestions(fn)
+  local hotspots = {}
+  local suggestions = {}
+  local seen = {}
+
+  local function add(text)
+    if text ~= "" and not seen[text] then
+      seen[text] = true
+      suggestions[#suggestions + 1] = text
+    end
+  end
+
+  if (fn.branching or 0) >= 6 then
+    hotspots[#hotspots + 1] = "high branching"
+    add("replace long condition chains with table-driven dispatch")
+  end
+
+  if (fn.nesting_depth or 0) >= 3 then
+    hotspots[#hotspots + 1] = "deep nesting"
+    add("extract nested blocks into helper functions and use guard clauses")
+  end
+
+  if (fn.loops or 0) >= 3 then
+    hotspots[#hotspots + 1] = "loop-heavy"
+    add("split loop responsibilities and extract inner loops")
+  end
+
+  if (fn.loops or 0) >= 2 and (fn.nesting_depth or 0) >= 2 then
+    add("extract inner-loop work into dedicated functions")
+  end
+
+  if (fn.call_count or 0) >= 8 and (fn.branching or 0) <= 2 then
+    add("consider splitting orchestration into smaller stage functions")
+  end
+
+  if (fn.score or 0) > 20 then
+    hotspots[#hotspots + 1] = "score above threshold"
+    add("decompose function and reduce transitive dependencies")
+  end
+
+  if #suggestions == 0 and (fn.score or 0) > 10 then
+    add("review function boundaries and extract focused helpers")
+  end
+
+  fn.hotspots = hotspots
+  fn.suggestions = suggestions
+end
+
+local function infer_role(fn)
+  if (fn.call_count or 0) >= 5 and (fn.branching or 0) <= 3 and (fn.loops or 0) <= 1 then
+    return "orchestrator"
+  end
+  if (fn.self_score or 0) <= 5 and (fn.branching or 0) <= 2 and (fn.loops or 0) == 0 and (fn.nesting_depth or 0) <= 1 then
+    return "utility"
+  end
+  return "core-logic"
+end
+
+local function analyze_function_complexity(lines, fn)
+  local branch = 0
+  local loops = 0
+  local calls = 0
+  local depth = 0
+  local current_depth = 0
+  local nested_maps = 0
+
+  for line_nr = fn.line, fn.end_line do
+    local raw = lines[line_nr] or ""
+    local line = raw:gsub("//.*$", "")
+
+    local close_count = select(2, line:gsub("}", ""))
+    current_depth = math.max(current_depth - close_count, 0)
+
+    branch = branch + count_pattern(line, "%f[%a]if%f[%A]")
+    branch = branch + count_pattern(line, "%f[%a]elseif%f[%A]")
+    branch = branch + count_pattern(line, "%f[%a]switch%f[%A]")
+    branch = branch + count_pattern(line, "%f[%a]case%f[%A]")
+
+    loops = loops + count_pattern(line, "%f[%a]for%f[%A]")
+    loops = loops + count_pattern(line, "%f[%a]while%f[%A]")
+
+    local line_calls = 0
+    for callee in line:gmatch("([%a_][%w_]*)%s*%(") do
+      if not KEYWORDS[callee] then
+        line_calls = line_calls + 1
+      end
+    end
+    calls = calls + line_calls
+
+    local opens = select(2, line:gsub("{", ""))
+    current_depth = current_depth + opens
+    if current_depth > depth then
+      depth = current_depth
+    end
+
+    local map_brackets = select(2, line:gsub("%[", ""))
+    if map_brackets > nested_maps then
+      nested_maps = map_brackets
+    end
+  end
+
+  fn.branching = branch
+  fn.loops = loops
+  fn.call_count = calls
+  fn.nesting_depth = math.max(depth, 0)
+  fn.self_score = branch + loops + calls + fn.nesting_depth
+  fn.data_complexity = {
+    nested_maps = nested_maps,
+    struct_depth = math.max(fn.nesting_depth - 1, 0),
+    level = data_complexity_level(nested_maps, math.max(fn.nesting_depth - 1, 0)),
+  }
+end
+
+local function compute_dependency_scores(functions, edges)
+  local adjacency = {}
+  local by_name = function_map(functions)
+
+  for _, fn in ipairs(functions) do
+    adjacency[fn.name] = {}
+  end
+
+  for _, edge in ipairs(edges) do
+    adjacency[edge.from][#adjacency[edge.from] + 1] = edge.to
+  end
+
+  for _, fn in ipairs(functions) do
+    local visited = {}
+    local sum = 0
+
+    local function walk(name)
+      for _, callee in ipairs(adjacency[name] or {}) do
+        if not visited[callee] then
+          visited[callee] = true
+          local target = by_name[callee]
+          if target then
+            sum = sum + (target.self_score or 0)
+            walk(callee)
+          end
+        end
+      end
+    end
+
+    walk(fn.name)
+    fn.dependency_score = sum
+    fn.score = (fn.self_score or 0) + sum
+  end
+
+  for _, edge in ipairs(edges) do
+    local target = by_name[edge.to]
+    edge.contribution = target and (target.self_score or 0) or 0
+  end
+end
+
+local function decorate_function(fn)
+  fn.role = infer_role(fn)
+  fn.threshold = score_band(fn.score or 0)
+  fn.role_assessment = role_assessment(fn.role, fn.score or 0)
+  derive_hotspots_and_suggestions(fn)
+end
+
+local function build_breakdown(fn)
+  return {
+    branching = fn.branching or 0,
+    nesting_depth = fn.nesting_depth or 0,
+    loops = fn.loops or 0,
+    calls = fn.call_count or 0,
+  }
+end
+
+local function to_entry(fn, reason)
+  return {
+    name = fn.name,
+    line = fn.line,
+    score = fn.score or 0,
+    self_score = fn.self_score or 0,
+    dependency_score = fn.dependency_score or 0,
+    entry_score = fn.entry_score or 0,
+    breakdown = build_breakdown(fn),
+    role = fn.role,
+    threshold = fn.threshold,
+    role_assessment = fn.role_assessment,
+    hotspots = fn.hotspots,
+    suggestions = fn.suggestions,
+    data_complexity = fn.data_complexity,
+    reason = reason,
+  }
+end
+
+local function to_important(fn)
+  return {
+    name = fn.name,
+    line = fn.line,
+    score = fn.score or 0,
+    self_score = fn.self_score or 0,
+    dependency_score = fn.dependency_score or 0,
+    breakdown = build_breakdown(fn),
+    role = fn.role,
+    threshold = fn.threshold,
+    role_assessment = fn.role_assessment,
+    hotspots = fn.hotspots,
+    suggestions = fn.suggestions,
+    data_complexity = fn.data_complexity,
+    visibility = fn.visibility,
+  }
+end
+
 local function choose_entry_points(file_path, functions)
   local file_hint = basename(file_path)
   local entries = {}
 
   for _, fn in ipairs(functions) do
-    local score = score_name(fn.name)
+    local entry_score = score_name(fn.name)
     if ENTRY_FILE_HINTS[file_hint] and fn.line <= 120 then
-      score = score + 2
+      entry_score = entry_score + 2
     end
     if fn.name == "main" then
-      score = score + 4
+      entry_score = entry_score + 4
     end
-    if score > 0 then
-      entries[#entries + 1] = {
-        name = fn.name,
-        line = fn.line,
-        score = score,
-        reason = "entry-like naming",
-      }
+    fn.entry_score = entry_score
+    if entry_score > 0 then
+      entries[#entries + 1] = to_entry(fn, "entry-like naming")
     end
   end
 
   table.sort(entries, function(a, b)
-    if a.score == b.score then
+    if a.entry_score == b.entry_score then
       return a.line < b.line
     end
-    return a.score > b.score
+    return a.entry_score > b.entry_score
   end)
 
   if #entries == 0 and functions[1] then
-    entries[1] = {
-      name = functions[1].name,
-      line = functions[1].line,
-      score = 1,
-      reason = "first function in file",
-    }
+    functions[1].entry_score = 1
+    entries[1] = to_entry(functions[1], "first function in file")
   end
 
   while #entries > 3 do
@@ -358,58 +656,18 @@ local function choose_entry_points(file_path, functions)
   return entries
 end
 
-local function line_distance_to_entry(fn, entries)
-  local best
-  for _, entry in ipairs(entries) do
-    local distance = math.abs((entry.line or 0) - (fn.line or 0))
-    if not best or distance < best then
-      best = distance
-    end
-  end
-  return best or 99999
-end
-
-local function rank_functions(functions, entries, outgoing, incoming, max_functions)
-  local entry_names = {}
-  for _, entry in ipairs(entries) do
-    entry_names[entry.name] = true
-  end
-
+local function rank_functions(functions, max_functions)
   local ranked = {}
   for _, fn in ipairs(functions) do
-    local score = score_name(fn.name)
-
-    if fn.visibility == "public" then
-      score = score + 2
-    end
-
-    if entry_names[fn.name] then
-      score = score + 5
-    end
-
-    score = score + math.min(outgoing[fn.name] or 0, 3)
-    score = score + math.min(incoming[fn.name] or 0, 2)
-
-    local distance = line_distance_to_entry(fn, entries)
-    if distance <= 20 then
-      score = score + 3
-    elseif distance <= 60 then
-      score = score + 2
-    elseif distance <= 120 then
-      score = score + 1
-    end
-
-    ranked[#ranked + 1] = {
-      name = fn.name,
-      line = fn.line,
-      score = score,
-      visibility = fn.visibility,
-    }
+    ranked[#ranked + 1] = to_important(fn)
   end
 
   table.sort(ranked, function(a, b)
     if a.score == b.score then
-      return a.line < b.line
+      if (a.self_score or 0) == (b.self_score or 0) then
+        return a.line < b.line
+      end
+      return (a.self_score or 0) > (b.self_score or 0)
     end
     return a.score > b.score
   end)
@@ -433,12 +691,24 @@ local function select_flow(entries, ranked, edges, max_edges)
   local filtered = {}
   for _, edge in ipairs(edges) do
     if interesting[edge.from] or interesting[edge.to] then
-      filtered[#filtered + 1] = edge
+      filtered[#filtered + 1] = {
+        from = edge.from,
+        to = edge.to,
+        line = edge.line,
+        contribution = edge.contribution or 0,
+      }
     end
   end
 
   if #filtered == 0 then
-    filtered = edges
+    for _, edge in ipairs(edges) do
+      filtered[#filtered + 1] = {
+        from = edge.from,
+        to = edge.to,
+        line = edge.line,
+        contribution = edge.contribution or 0,
+      }
+    end
   end
 
   while #filtered > max_edges do
@@ -448,17 +718,179 @@ local function select_flow(entries, ranked, edges, max_edges)
   return filtered
 end
 
+local function collect_hotspots(functions, max_items)
+  local items = {}
+  for _, fn in ipairs(functions) do
+    if fn.hotspots and #fn.hotspots > 0 then
+      items[#items + 1] = {
+        name = fn.name,
+        line = fn.line,
+        score = fn.score,
+        role = fn.role,
+        reason = table.concat(fn.hotspots, ", "),
+        suggestion = fn.suggestions and fn.suggestions[1] or nil,
+      }
+    end
+  end
+
+  table.sort(items, function(a, b)
+    if a.score == b.score then
+      return a.line < b.line
+    end
+    return a.score > b.score
+  end)
+
+  while #items > max_items do
+    table.remove(items)
+  end
+
+  return items
+end
+
+local function build_function_groups(entries, functions, edges)
+  local by_name = function_map(functions)
+  local adjacency = {}
+  for _, fn in ipairs(functions) do
+    adjacency[fn.name] = {}
+  end
+  for _, edge in ipairs(edges) do
+    adjacency[edge.from][#adjacency[edge.from] + 1] = edge.to
+  end
+
+  local groups = {}
+  local seen_groups = {}
+
+  local function build_group(root)
+    if not root or not by_name[root] then
+      return
+    end
+
+    local visited = {}
+    local stack = { root }
+    while #stack > 0 do
+      local name = table.remove(stack)
+      if not visited[name] then
+        visited[name] = true
+        for _, child in ipairs(adjacency[name] or {}) do
+          if not visited[child] then
+            stack[#stack + 1] = child
+          end
+        end
+      end
+    end
+
+    local names = {}
+    local score = 0
+    for name in pairs(visited) do
+      names[#names + 1] = name
+      score = score + ((by_name[name] and by_name[name].score) or 0)
+    end
+    table.sort(names)
+    local key = table.concat(names, "|")
+    if key ~= "" and not seen_groups[key] then
+      seen_groups[key] = true
+      groups[#groups + 1] = {
+        name = root .. " pipeline",
+        kind = "call-graph",
+        score = score,
+        function_count = #names,
+        functions = names,
+      }
+    end
+  end
+
+  for _, entry in ipairs(entries) do
+    build_group(entry.name)
+  end
+
+  if #groups == 0 and functions[1] then
+    local top = functions[1]
+    for i = 2, #functions do
+      if (functions[i].score or 0) > (top.score or 0) then
+        top = functions[i]
+      end
+    end
+    build_group(top.name)
+  end
+
+  table.sort(groups, function(a, b)
+    if a.score == b.score then
+      return a.name < b.name
+    end
+    return a.score > b.score
+  end)
+
+  while #groups > 5 do
+    table.remove(groups)
+  end
+
+  return groups
+end
+
+local function build_module_scores(file_path, functions)
+  local module = vim.fn.fnamemodify(file_path, ":t")
+  local score = 0
+  for _, fn in ipairs(functions) do
+    score = score + (fn.score or 0)
+  end
+  return {
+    {
+      module = module,
+      score = score,
+      function_count = #functions,
+    },
+  }
+end
+
+local function build_data_complexity(functions)
+  local nested_maps = 0
+  local struct_depth = 0
+  local types = {}
+
+  for _, fn in ipairs(functions) do
+    local dc = fn.data_complexity or {}
+    local maps = dc.nested_maps or 0
+    local depth = dc.struct_depth or 0
+    if maps > nested_maps then
+      nested_maps = maps
+    end
+    if depth > struct_depth then
+      struct_depth = depth
+    end
+  end
+
+  return {
+    level = data_complexity_level(nested_maps, struct_depth),
+    nested_maps = nested_maps,
+    struct_depth = struct_depth,
+    types = types,
+  }
+end
+
 function M.analyze(bufnr, opts)
   local file_path = vim.api.nvim_buf_get_name(bufnr)
   local filetype = vim.bo[bufnr].filetype
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
   local functions = collect_functions(bufnr, filetype, lines)
+  for _, fn in ipairs(functions) do
+    analyze_function_complexity(lines, fn)
+  end
+
+  local edges = collect_edges(lines, functions)
+  compute_dependency_scores(functions, edges)
+  for _, fn in ipairs(functions) do
+    decorate_function(fn)
+  end
+
   local annotations = collect_annotations(lines)
-  local edges, outgoing, incoming = collect_edges(lines, functions)
   local entries = choose_entry_points(file_path, functions)
-  local ranked = rank_functions(functions, entries, outgoing, incoming, opts.max_functions)
+  local ranked = rank_functions(functions, opts.max_functions)
   local flow = select_flow(entries, ranked, edges, opts.max_flow_edges)
+  local hotspots = collect_hotspots(functions, 8)
+  local groups = build_function_groups(entries, functions, edges)
+  local module_scores = build_module_scores(file_path, functions)
+  local data_complexity = build_data_complexity(functions)
 
   local function_ranges = {}
   for _, fn in ipairs(functions) do
@@ -478,6 +910,11 @@ function M.analyze(bufnr, opts)
     execution_flow = flow,
     annotations = annotations,
     function_ranges = function_ranges,
+    score_thresholds = SCORE_THRESHOLDS,
+    hotspots = hotspots,
+    function_groups = groups,
+    module_scores = module_scores,
+    data_complexity = data_complexity,
   }
 end
 
